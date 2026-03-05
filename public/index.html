@@ -67,6 +67,11 @@
     tbody tr:hover{background:rgba(255,255,255,0.02);}
     .td-right{text-align:right;}.td-center{text-align:center;}
     .hrs-bar-wrap{display:flex;align-items:center;gap:8px;}.hrs-bar-bg{flex:1;height:6px;background:var(--border);border-radius:3px;min-width:80px;max-width:160px;}.hrs-bar-fill{height:6px;border-radius:3px;}.hrs-val{font-family:var(--mono);font-size:11px;white-space:nowrap;min-width:44px;text-align:right;}
+    .component-card{padding:12px 14px;}
+    .component-card .item-title{margin-bottom:8px;}
+    .component-card-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+    .component-card-meta .mono-pill{font-size:10px;}
+    .component-hours{margin-top:8px;}
     .util-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px;}
     .util-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
     .util-card-header{background:var(--surface2);border-bottom:1px solid var(--border);padding:10px 14px;display:flex;justify-content:space-between;align-items:center;}
@@ -129,6 +134,9 @@
         <button class="chip" onclick="setSeverityFilter('ok',this)">OK</button>
       </div>
     </div>
+    <div class="section-label">Retire / Overhaul Components</div>
+    <div id="front-comp-cards" class="cards"></div>
+    <div id="empty-front-comp" class="empty" hidden style="margin-bottom:12px;">No retire or overhaul components currently within selected window.</div>
     <div class="section-label">Inspections by Aircraft</div>
     <div id="cards" class="cards"></div>
     <div id="empty-inspections" class="empty" hidden>No tracked inspection items found.</div>
@@ -145,7 +153,7 @@
       </div>
     </div>
     <div class="section-label">Components Due Retire / Overhaul</div>
-    <div class="table-wrap"><table><thead><tr><th>Aircraft</th><th>ATA</th><th>Component</th><th>Type</th><th class="td-right">Hours Remaining</th></tr></thead><tbody id="comp-tbody"></tbody></table></div>
+    <div id="comp-cards" class="cards"></div>
     <div id="empty-comp" class="empty" hidden style="margin-top:12px;">No components found within selected window.</div>
   </div>
   <!-- UTILIZATION -->
@@ -236,13 +244,17 @@ function renderInspections(){
     const rows=list.slice(0,12).map(it=>{const sev=classifyItem(it);const insp=safeStr(it.inspection||"Inspection");const ata=safeStr(it.ata||"—");const due=fmtDate(it.due_date);const d=(it.remaining_days!==null&&it.remaining_days!==undefined&&!isNaN(Number(it.remaining_days)))?Number(it.remaining_days):null;const h=(it.remaining_hours!==null&&it.remaining_hours!==undefined&&!isNaN(Number(it.remaining_hours)))?Number(it.remaining_hours):null;const metric=d!==null?d+"d":h!==null?h.toFixed(1)+"h":safeStr(it.status||"—").slice(0,18);const meta=[];if(ata&&ata!=="—")meta.push('<span class="mono-pill">ATA '+ata+'</span>');if(due!=="—")meta.push('<span class="mono-pill">DUE '+due+'</span>');meta.push('<span class="mono-pill">'+metric+'</span>');return'<div class="item"><div class="bar '+barClass(sev)+'"></div><div class="item-main"><div class="item-title" title="'+insp+'">'+insp+'</div><div class="item-meta">'+meta.join(" ")+'</div></div>'+badgeFor(sev)+'</div>';}).join("");
     const card=document.createElement("div");card.className="card";card.innerHTML='<div class="card-header"><div class="card-tail"><span>'+tail+'</span><span class="subline">'+(tt?Number(tt).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1})+" TT":"")+'</span></div>'+badgeFor(sevTop)+'</div><div class="card-body">'+rows+'</div>';cards.appendChild(card);});
 }
+function componentTypeLabel(component){const desc=safeStr(component.description).toUpperCase();if(desc.includes("RETIRE"))return"RETIRE";if(desc.includes("OVERHAUL"))return"OVERHAUL";if(desc.includes("LIMIT"))return"LIMIT";return safeStr(component.item_type||"PART").toUpperCase();}
+function componentBadgeClass(label){return{RETIRE:"b-overdue",OVERHAUL:"b-amber",LIMIT:"b-red",PART:"b-blue"}[label]||"b-blue";}
+function componentColor(sev){return{overdue:"var(--overdue)",critical:"var(--red)",coming:"var(--amber)",ok:"var(--green)"}[sev]||"var(--muted)";}
+function renderComponentCards(targetId,list){const target=document.getElementById(targetId);if(!target)return;target.innerHTML="";if(!list.length)return;const maxH=Math.max(200,...list.map(c=>Number(c.remaining_hours)||0));list.forEach(c=>{const h=isFinite(Number(c.remaining_hours))?Number(c.remaining_hours):null;const sev=classifyHours(h);const pct=h!==null?Math.min(100,Math.max(0,(h/maxH)*100)):0;const color=componentColor(sev);const hStr=h!==null?h.toFixed(1):"—";const label=componentTypeLabel(c);const card=document.createElement("div");card.className="card component-card";card.innerHTML='<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;"><div><div class="item-title" title="'+safeStr(c.description)+'">'+safeStr(c.description)+'</div><div class="component-card-meta"><span class="mono-pill">'+safeStr(c.tail||"UNKNOWN")+'</span><span class="mono-pill">ATA '+(safeStr(c.ata)||"—")+'</span></div></div><span class="badge '+componentBadgeClass(label)+'">'+label+'</span></div><div class="component-hours"><div class="hrs-bar-wrap"><div class="hrs-bar-bg"><div class="hrs-bar-fill" style="width:'+pct+'%;background:'+color+';"></div></div><span class="hrs-val" style="color:'+color+'">'+hStr+' hrs</span></div></div>';target.appendChild(card);});}
+function renderFrontComponents(){const list=RAW_COMP.filter(c=>{const h=Number(c.remaining_hours);return isFinite(h)&&h<=200;}).sort((a,b)=>Number(a.remaining_hours)-Number(b.remaining_hours)||safeStr(a.tail).localeCompare(safeStr(b.tail))).slice(0,6);document.getElementById("empty-front-comp").hidden=!!list.length;renderComponentCards("front-comp-cards",list);}
 function setCompWindow(w,btn){compWindow=w;document.querySelectorAll("#comp-window-chips .chip").forEach(c=>c.classList.remove("active"));btn.classList.add("active");renderComponents();}
 function renderComponents(){
   const q=document.getElementById("q-comp").value.trim().toLowerCase();
   const filtered=RAW_COMP.filter(c=>{const h=Number(c.remaining_hours);if(compWindow<9999&&(!isFinite(h)||h>compWindow))return false;if(!q)return true;return[c.tail,c.ata,c.description,c.item_type].map(safeStr).join(" ").toLowerCase().includes(q);}).sort((a,b)=>{const ha=isFinite(Number(a.remaining_hours))?Number(a.remaining_hours):99999;const hb=isFinite(Number(b.remaining_hours))?Number(b.remaining_hours):99999;return ha-hb||a.tail.localeCompare(b.tail);});
-  const tbody=document.getElementById("comp-tbody");tbody.innerHTML="";document.getElementById("empty-comp").hidden=!!filtered.length;if(!filtered.length)return;
-  const maxH=Math.max(200,...filtered.map(c=>Number(c.remaining_hours)||0));
-  filtered.forEach(c=>{const h=isFinite(Number(c.remaining_hours))?Number(c.remaining_hours):null;const sev=classifyHours(h);const pct=h!==null?Math.min(100,Math.max(0,(h/maxH)*100)):0;const color={overdue:"var(--overdue)",critical:"var(--red)",coming:"var(--amber)",ok:"var(--green)"}[sev]||"var(--muted)";const hStr=h!==null?h.toFixed(1):"—";const desc=safeStr(c.description).toUpperCase();const label=desc.includes("RETIRE")?"RETIRE":desc.includes("OVERHAUL")?"OVERHAUL":desc.includes("LIMIT")?"LIMIT":safeStr(c.item_type);const badgeCls={RETIRE:"b-overdue",OVERHAUL:"b-amber",LIMIT:"b-red"}[label]||"b-blue";const tr=document.createElement("tr");tr.innerHTML='<td><span class="mono-pill">'+c.tail+'</span></td><td><span class="mono-pill">'+(safeStr(c.ata)||"—")+'</span></td><td style="max-width:340px;white-space:normal;line-height:1.3;">'+safeStr(c.description)+'</td><td class="td-center"><span class="badge '+badgeCls+'">'+label+'</span></td><td class="td-right"><div class="hrs-bar-wrap"><div class="hrs-bar-bg"><div class="hrs-bar-fill" style="width:'+pct+'%;background:'+color+';"></div></div><span class="hrs-val" style="color:'+color+'">'+hStr+' hrs</span></div></td>';tbody.appendChild(tr);});
+  document.getElementById("empty-comp").hidden=!!filtered.length;if(!filtered.length){document.getElementById("comp-cards").innerHTML="";return;}
+  renderComponentCards("comp-cards",filtered);
 }
 function renderUtilization(){
   const grid=document.getElementById("util-grid");grid.innerHTML="";Object.values(utilCharts).forEach(c=>c.destroy());Object.keys(utilCharts).forEach(k=>delete utilCharts[k]);
@@ -273,7 +285,7 @@ document.getElementById("merlin-fallback").onclick=merlinClick;
 function buildMerlinQueue(){if(!DASH)return["The data isn't loaded yet. I've been waiting."];const items=[];(DASH.aircraft||[]).forEach(a=>{(a.items||[]).forEach(it=>items.push({tail:a.tail,...it}));});const overdue=items.filter(it=>(it.remaining_days!==null&&Number(it.remaining_days)<0)||it.status==="OVERDUE");const critical=items.filter(it=>{const d=Number(it.remaining_days);return!isNaN(d)&&d>=0&&d<=7;});const comp50=(DASH.components||[]).filter(c=>c.remaining_hours<=50);const queue=[];const totalBad=overdue.length+critical.length;if(totalBad>=3)queue.push(MERLIN_LINES.manyIssues(totalBad));overdue.forEach(o=>queue.push(MERLIN_LINES.overdue(o.tail,o.inspection)));critical.forEach(c=>queue.push(MERLIN_LINES.critical(c.tail,c.inspection,Number(c.remaining_days))));comp50.forEach(comp=>queue.push(MERLIN_LINES.components(comp.tail,comp.description,comp.remaining_hours)));if(!queue.length)queue.push(MERLIN_LINES.allGood);return queue;}
 function merlinBriefing(){if(merlinQueueIndex>0&&merlinQueueIndex<merlinQueueItems.length){const text=merlinQueueItems[merlinQueueIndex++];const hasMore=merlinQueueIndex<merlinQueueItems.length;merlinSpeak(text,{more:hasMore?merlinBriefing:null});return;}merlinQueueItems=buildMerlinQueue();merlinQueueIndex=0;const text=merlinQueueItems[merlinQueueIndex++];const hasMore=merlinQueueIndex<merlinQueueItems.length;merlinSpeak(text,{more:hasMore?merlinBriefing:null});}
 setInterval(()=>{if(document.getElementById("merlin-bubble").style.display==="none"){const line=MERLIN_LINES.idle[Math.floor(Math.random()*MERLIN_LINES.idle.length)];merlinSpeak(line);}},3*60*1000);
-async function loadDashboard(){const errorBox=document.getElementById("error-box");errorBox.hidden=true;try{const res=await fetch(DASHBOARD_URL+"?t="+Date.now(),{cache:"no-store"});if(!res.ok)throw new Error("HTTP "+res.status);DASH=await res.json();RAW_COMP=Array.isArray(DASH.components)?DASH.components:[];updateHeader(DASH.meta||{});const items=normalizeItems(DASH);renderSummary(items);renderMainChart(items);renderInspections();}catch(err){console.error(err);errorBox.hidden=false;errorBox.innerHTML='<div style="font-weight:700;margin-bottom:6px;">Dashboard load failed</div><div>Could not load '+DASHBOARD_URL+'</div>';}}
+async function loadDashboard(){const errorBox=document.getElementById("error-box");errorBox.hidden=true;try{const res=await fetch(DASHBOARD_URL+"?t="+Date.now(),{cache:"no-store"});if(!res.ok)throw new Error("HTTP "+res.status);DASH=await res.json();RAW_COMP=Array.isArray(DASH.components)?DASH.components:[];updateHeader(DASH.meta||{});const items=normalizeItems(DASH);renderSummary(items);renderMainChart(items);renderFrontComponents();renderInspections();}catch(err){console.error(err);errorBox.hidden=false;errorBox.innerHTML='<div style="font-weight:700;margin-bottom:6px;">Dashboard load failed</div><div>Could not load '+DASHBOARD_URL+'</div>';}}
 document.getElementById("q-aircraft").addEventListener("input",()=>renderInspections());
 document.getElementById("q-comp").addEventListener("input",()=>renderComponents());
 loadDashboard();
