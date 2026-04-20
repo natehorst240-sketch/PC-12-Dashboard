@@ -34,14 +34,27 @@ jobs:
           FLIGHTDOCS_HEADLESS: 'true'
         run: npm run fetch-due-list
 
-      - name: Commit updated CSV
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas
+
+      - name: Update flight hours history
+        run: python src/build_dashboard.py
+
+      - name: Commit updated CSV and flight hours history
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/PC12-Daily-Due-List.csv
+          git add data/PC12-Daily-Due-List.csv data/pilatus_pc_12_flight_hours_history.json
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update PC12-Daily-Due-List.csv [skip ci]"
+            git commit -m "chore: update PC12 due list + flight hours history [skip ci]"
             git push origin HEAD
           fi
