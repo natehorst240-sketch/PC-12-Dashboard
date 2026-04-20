@@ -188,14 +188,20 @@ async function login(page: Page, username: string, password: string): Promise<vo
   ]);
   log(`Submitted login form using ${submitSelector}`);
 
-  await page.waitForLoadState('networkidle', { timeout: 60_000 });
+  try {
+    await page.waitForURL((url: URL) => !/auth\.flightdocs\.com/i.test(url.hostname), {
+      timeout: 60_000,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Login did not navigate away from auth host: ${message}`);
+  }
   log(`Post-login URL: ${page.url()}`);
 }
 
 async function exportDueList(page: Page): Promise<Download> {
   log('Navigating to PC-12 due-list page');
   await page.goto(DUE_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-  await page.waitForLoadState('networkidle', { timeout: 90_000 });
 
   const exportSelectors: string[] = [
     'button:has-text("Export")',
@@ -204,16 +210,21 @@ async function exportDueList(page: Page): Promise<Download> {
     '[title="Export"]',
   ];
 
-  for (const selector of exportSelectors) {
-    const locator = await getLocatorIfPresent(page, selector);
-    if (locator && (await isClickable(locator))) {
-      log(`Export control found using ${selector}`);
-      const [download] = await Promise.all([
-        page.waitForEvent('download', { timeout: 120_000 }),
-        locator.click({ timeout: 10_000 }),
-      ]);
-      return download;
+  const start = Date.now();
+  const overallTimeoutMs = 120_000;
+  while (Date.now() - start < overallTimeoutMs) {
+    for (const selector of exportSelectors) {
+      const locator = await getLocatorIfPresent(page, selector);
+      if (locator && (await isClickable(locator))) {
+        log(`Export control found using ${selector}`);
+        const [download] = await Promise.all([
+          page.waitForEvent('download', { timeout: 120_000 }),
+          locator.click({ timeout: 10_000 }),
+        ]);
+        return download;
+      }
     }
+    await page.waitForTimeout(500);
   }
 
   throw new Error(`Unable to find Export button with selectors: ${exportSelectors.join(', ')}`);
