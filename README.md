@@ -1,7 +1,7 @@
 # Pilatus PC-12 Fleet Maintenance Dashboard
 **SINGLE ENGINE TURBOPROP**
 
-Live dashboard: https://natehorst240-sketch.github.io/pc12-dashboard/
+Live dashboard: https://natehorst240-sketch.github.io/PC-12-Dashboard/
 
 ## Setup
 
