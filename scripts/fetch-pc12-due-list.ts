@@ -203,11 +203,32 @@ async function exportDueList(page: Page): Promise<Download> {
   log('Navigating to PC-12 due-list page');
   await page.goto(DUE_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+  } catch {
+    log('Network did not become fully idle; proceeding anyway');
+  }
+
   const exportSelectors: string[] = [
     'button:has-text("Export")',
     'a:has-text("Export")',
     '[aria-label="Export"]',
     '[title="Export"]',
+  ];
+
+  // Selectors for sub-menu items that appear after clicking Export
+  const exportSubMenuSelectors: string[] = [
+    'a:has-text("Excel")',
+    'button:has-text("Excel")',
+    'li:has-text("Excel") a',
+    'li:has-text("Excel") button',
+    'a:has-text("Export to Excel")',
+    'button:has-text("Export to Excel")',
+    'a:has-text("XLSX")',
+    'a:has-text("CSV")',
+    'li:has-text("CSV") a',
+    'li:has-text("Download") a',
+    'a:has-text("Download")',
   ];
 
   const start = Date.now();
@@ -217,10 +238,26 @@ async function exportDueList(page: Page): Promise<Download> {
       const locator = await getLocatorIfPresent(page, selector);
       if (locator && (await isClickable(locator))) {
         log(`Export control found using ${selector}`);
-        const [download] = await Promise.all([
-          page.waitForEvent('download', { timeout: 120_000 }),
-          locator.click({ timeout: 10_000 }),
-        ]);
+
+        // Start listening for download before any clicks so we don't miss it
+        const downloadPromise = page.waitForEvent('download', { timeout: 150_000 });
+
+        await locator.click({ timeout: 10_000 });
+
+        // Allow time for a sub-menu or dropdown to render
+        await page.waitForTimeout(2_000);
+
+        // If a sub-menu item appeared, click it (the download event is already being listened for)
+        for (const subSelector of exportSubMenuSelectors) {
+          const subLocator = await getLocatorIfPresent(page, subSelector);
+          if (subLocator && (await isClickable(subLocator))) {
+            log(`Export submenu found using ${subSelector}; clicking`);
+            await subLocator.click({ timeout: 10_000 });
+            break;
+          }
+        }
+
+        const download = await downloadPromise;
         return download;
       }
     }
