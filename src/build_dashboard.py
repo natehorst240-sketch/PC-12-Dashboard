@@ -63,11 +63,13 @@ def save_history(history):
 def collect_snapshots(df):
     df = df.copy()
     df.columns = [c.lstrip("\ufeff").strip() for c in df.columns]
+    seen = set()
     snapshots = []
     for _, row in df.iterrows():
         tail  = _norm(row.get("Registration Number",""))
         hrs   = pd.to_numeric(row.get("Airframe Hours", row.get("Total Time","")), errors="coerce")
-        rdate = _norm(row.get("Report Date", row.get("Export Date","")))
+        rdate = _norm(row.get("Airframe Report Date",
+                      row.get("Report Date", row.get("Export Date",""))))
         if tail and not pd.isna(hrs) and rdate:
             try:
                 dt = datetime.strptime(rdate, "%m/%d/%Y").date().isoformat()
@@ -76,6 +78,10 @@ def collect_snapshots(df):
                     dt = datetime.strptime(rdate, "%Y-%m-%d").date().isoformat()
                 except ValueError:
                     continue
+            key = (tail, dt)
+            if key in seen:
+                continue
+            seen.add(key)
             snapshots.append((tail, dt, float(hrs)))
     return snapshots
 
@@ -170,9 +176,9 @@ def build():
     insp_df["Remaining Hours"] = pd.to_numeric(insp_df.get("Remaining Hours",""), errors="coerce")
     insp_df["Remaining Days"]  = pd.to_numeric(insp_df.get("Remaining Days",""),  errors="coerce")
 
-    # Get report date from most common date in export
+    # Get report date from most common Airframe Report Date in export
     try:
-        report_date = insp_df["Report Date"].dropna().mode()[0]
+        report_date = insp_df["Airframe Report Date"].dropna().mode()[0]
         report_date = datetime.strptime(report_date, "%m/%d/%Y").date().isoformat()
     except Exception:
         report_date = date.today().isoformat()
