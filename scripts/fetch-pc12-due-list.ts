@@ -238,8 +238,15 @@ async function exportDueList(page: Page): Promise<Download> {
   ];
 
   // Selectors for sub-menu / dropdown items that appear after clicking Export.
-  // Restricted to :visible so we don't match hidden/collapsed menu nodes.
+  // Restricted to :visible so we don't match hidden/collapsed menu nodes. The
+  // "Export Due List" confirmation dialog is matched first so its primary
+  // Export button takes precedence over the toolbar Export link behind it.
   const exportSubMenuSelectors: string[] = [
+    '[role="dialog"] button:has-text("Export"):visible',
+    '[role="dialog"] a:has-text("Export"):visible',
+    '.modal-footer button:has-text("Export"):visible',
+    '.modal-dialog button:has-text("Export"):visible',
+    '.modal button:has-text("Export"):visible',
     '[role="menuitem"]:has-text("Excel"):visible',
     '[role="menuitem"]:has-text("XLSX"):visible',
     '[role="menuitem"]:has-text("CSV"):visible',
