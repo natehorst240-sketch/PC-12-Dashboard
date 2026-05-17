@@ -34,6 +34,15 @@ jobs:
           FLIGHTDOCS_HEADLESS: 'true'
         run: npm run fetch-due-list
 
+      - name: Upload export failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pc12-export-diagnostics
+          path: data/debug/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

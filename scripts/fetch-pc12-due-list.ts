@@ -199,6 +199,27 @@ async function login(page: Page, username: string, password: string): Promise<vo
   log(`Post-login URL: ${page.url()}`);
 }
 
+async function saveExportDiagnostics(page: Page, reason: string): Promise<void> {
+  const debugDir =
+    process.env.FLIGHTDOCS_DEBUG_DIR || path.join(process.cwd(), 'data', 'debug');
+  try {
+    await ensureDir(debugDir);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const screenshotPath = path.join(debugDir, `pc12-export-${reason}-${stamp}.png`);
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    log(`Saved failure screenshot to ${screenshotPath}`);
+    const htmlPath = path.join(debugDir, `pc12-export-${reason}-${stamp}.html`);
+    await fs.writeFile(htmlPath, await page.content(), 'utf8');
+    log(`Saved failure HTML to ${htmlPath}`);
+  } catch (err) {
+    log(
+      `Failed to save export diagnostics: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 async function exportDueList(page: Page): Promise<Download> {
   log('Navigating to PC-12 due-list page');
   await page.goto(DUE_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 90_000 });
@@ -216,49 +237,106 @@ async function exportDueList(page: Page): Promise<Download> {
     '[title="Export"]',
   ];
 
-  // Selectors for sub-menu items that appear after clicking Export
+  // Selectors for sub-menu / dropdown items that appear after clicking Export.
+  // Restricted to :visible so we don't match hidden/collapsed menu nodes.
   const exportSubMenuSelectors: string[] = [
-    'a:has-text("Excel")',
-    'button:has-text("Excel")',
-    'li:has-text("Excel") a',
-    'li:has-text("Excel") button',
-    'a:has-text("Export to Excel")',
-    'button:has-text("Export to Excel")',
-    'a:has-text("XLSX")',
-    'a:has-text("CSV")',
-    'li:has-text("CSV") a',
-    'li:has-text("Download") a',
-    'a:has-text("Download")',
+    '[role="menuitem"]:has-text("Excel"):visible',
+    '[role="menuitem"]:has-text("XLSX"):visible',
+    '[role="menuitem"]:has-text("CSV"):visible',
+    '[role="menuitem"]:has-text("Download"):visible',
+    'a:has-text("Export to Excel"):visible',
+    'button:has-text("Export to Excel"):visible',
+    'a:has-text("Excel"):visible',
+    'button:has-text("Excel"):visible',
+    'a:has-text("XLSX"):visible',
+    'button:has-text("XLSX"):visible',
+    'a:has-text("CSV"):visible',
+    'button:has-text("CSV"):visible',
+    'li:has-text("Excel"):visible a',
+    'li:has-text("Excel"):visible button',
+    'li:has-text("CSV"):visible a',
+    'li:has-text("Download"):visible a',
+    'a:has-text("Download"):visible',
+    'button:has-text("Download"):visible',
+    'button:has-text("Generate"):visible',
   ];
 
+  const downloadTimeoutMs = Number(
+    process.env.FLIGHTDOCS_DOWNLOAD_TIMEOUT_MS || 300_000,
+  );
+  const submenuPollTimeoutMs = Number(
+    process.env.FLIGHTDOCS_SUBMENU_TIMEOUT_MS || 30_000,
+  );
+
   const start = Date.now();
-  const overallTimeoutMs = 120_000;
-  while (Date.now() - start < overallTimeoutMs) {
+  const findExportTimeoutMs = 120_000;
+  while (Date.now() - start < findExportTimeoutMs) {
     for (const selector of exportSelectors) {
       const locator = await getLocatorIfPresent(page, selector);
       if (locator && (await isClickable(locator))) {
         log(`Export control found using ${selector}`);
 
         // Start listening for download before any clicks so we don't miss it
-        const downloadPromise = page.waitForEvent('download', { timeout: 150_000 });
+        const downloadPromise = page.waitForEvent('download', {
+          timeout: downloadTimeoutMs,
+        });
+        let downloadResolved = false;
+        downloadPromise.then(
+          () => {
+            downloadResolved = true;
+          },
+          () => {
+            downloadResolved = true;
+          },
+        );
 
         await locator.click({ timeout: 10_000 });
 
-        // Allow time for a sub-menu or dropdown to render
-        await page.waitForTimeout(2_000);
-
-        // If a sub-menu item appeared, click it (the download event is already being listened for)
-        for (const subSelector of exportSubMenuSelectors) {
-          const subLocator = await getLocatorIfPresent(page, subSelector);
-          if (subLocator && (await isClickable(subLocator))) {
-            log(`Export submenu found using ${subSelector}; clicking`);
-            await subLocator.click({ timeout: 10_000 });
-            break;
+        // Actively poll for a submenu item rather than relying on a fixed wait.
+        // Stop polling as soon as a submenu is clicked or the download fires
+        // (covers the case where Export itself triggers an immediate download).
+        const submenuStart = Date.now();
+        let submenuClicked = false;
+        while (
+          !submenuClicked &&
+          !downloadResolved &&
+          Date.now() - submenuStart < submenuPollTimeoutMs
+        ) {
+          for (const subSelector of exportSubMenuSelectors) {
+            const subLocator = await getLocatorIfPresent(page, subSelector);
+            if (subLocator && (await isClickable(subLocator))) {
+              log(`Export submenu found using ${subSelector}; clicking`);
+              try {
+                await subLocator.click({ timeout: 10_000 });
+                submenuClicked = true;
+              } catch (err) {
+                log(
+                  `Failed to click submenu ${subSelector}: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+              }
+              break;
+            }
+          }
+          if (!submenuClicked && !downloadResolved) {
+            await page.waitForTimeout(500);
           }
         }
 
-        const download = await downloadPromise;
-        return download;
+        if (!submenuClicked && !downloadResolved) {
+          log(
+            'No submenu item appeared within poll window; saving diagnostics and continuing to wait for download',
+          );
+          await saveExportDiagnostics(page, 'no-submenu');
+        }
+
+        try {
+          return await downloadPromise;
+        } catch (err) {
+          await saveExportDiagnostics(page, 'download-timeout');
+          throw err;
+        }
       }
     }
     await page.waitForTimeout(500);
