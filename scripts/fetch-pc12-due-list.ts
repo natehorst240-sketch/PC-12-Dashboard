@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import process from 'node:process';
-import { chromium, type Download, type Locator, type Page } from 'playwright';
+import { chromium, type BrowserContext, type Download, type Locator, type Page } from 'playwright';
 import XLSX from 'xlsx';
 
 const LOGIN_URL: string =
@@ -57,6 +57,55 @@ async function getLocatorIfPresent(page: Page, selector: string): Promise<Locato
   const locator = page.locator(selector).first();
   if ((await locator.count()) === 0) return null;
   return locator;
+}
+
+// Pendo (in-app guide / onboarding) injects a full-page backdrop that sits on
+// top of the due-list toolbar and intercepts pointer events, which makes the
+// Export button impossible to click. Aborting its agent requests stops the
+// guides from ever rendering.
+async function blockPendo(context: BrowserContext): Promise<void> {
+  await context.route(
+    /(pendo\.io|pendo-static|pendo-io-static|data\.pendo)/i,
+    (route) => route.abort(),
+  );
+}
+
+// Defensive cleanup in case a Pendo guide still slipped through (e.g. served
+// from a host we did not block, or already cached). Removing the overlay nodes
+// frees up the underlying controls so they become clickable again.
+async function dismissPendoOverlays(page: Page): Promise<number> {
+  try {
+    const removed = await page.evaluate(() => {
+      const selectors = [
+        '#pendo-base',
+        '[id^="pendo-backdrop"]',
+        '[class*="_pendo-backdrop"]',
+        '[class*="_pendo-step-container"]',
+        '[id^="pendo-guide"]',
+        '[class*="pendo-resource-center"]',
+        '[class*="_pendo-badge"]',
+      ];
+      let count = 0;
+      for (const selector of selectors) {
+        document.querySelectorAll(selector).forEach((el) => {
+          el.remove();
+          count += 1;
+        });
+      }
+      return count;
+    });
+    if (removed > 0) {
+      log(`Removed ${removed} Pendo overlay element(s) blocking interaction`);
+    }
+    return removed;
+  } catch (err) {
+    log(
+      `Failed to dismiss Pendo overlays: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return 0;
+  }
 }
 
 async function isClickable(locator: Locator): Promise<boolean> {
@@ -230,6 +279,8 @@ async function exportDueList(page: Page): Promise<Download> {
     log('Network did not become fully idle; proceeding anyway');
   }
 
+  await dismissPendoOverlays(page);
+
   const exportSelectors: string[] = [
     'button:has-text("Export")',
     'a:has-text("Export")',
@@ -297,7 +348,16 @@ async function exportDueList(page: Page): Promise<Download> {
           },
         );
 
-        await locator.click({ timeout: 10_000 });
+        await dismissPendoOverlays(page);
+        try {
+          await locator.click({ timeout: 10_000 });
+        } catch (clickErr) {
+          // A Pendo backdrop can intercept the click; strip it and retry once.
+          const removed = await dismissPendoOverlays(page);
+          if (removed === 0) throw clickErr;
+          log('Retrying Export click after removing Pendo overlay');
+          await locator.click({ timeout: 10_000 });
+        }
 
         // Actively poll for a submenu item rather than relying on a fixed wait.
         // Stop polling as soon as a submenu is clicked or the download fires
@@ -309,6 +369,7 @@ async function exportDueList(page: Page): Promise<Download> {
           !downloadResolved &&
           Date.now() - submenuStart < submenuPollTimeoutMs
         ) {
+          await dismissPendoOverlays(page);
           for (const subSelector of exportSubMenuSelectors) {
             const subLocator = await getLocatorIfPresent(page, subSelector);
             if (subLocator && (await isClickable(subLocator))) {
@@ -403,6 +464,7 @@ async function runOnce(): Promise<void> {
 
   const browser = await chromium.launch({ headless: HEADLESS });
   const context = await browser.newContext({ acceptDownloads: true });
+  await blockPendo(context);
   const page = await context.newPage();
 
   try {
